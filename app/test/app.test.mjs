@@ -44,7 +44,16 @@ test('preserva registros, navega nas nove telas, salva questões e restaura back
   const textarea = document.querySelector('#modal textarea');
   textarea.value = backup;
   click('#rsok');
-  assert.match(document.getElementById('toast').textContent,/restaurad|importad/i);
+  await wait(() => /restaurad|importad/i.test(document.getElementById('toast').textContent));
+  const beforeInvalid=localStorage.getItem('fr_plano_v1');
+  click('[data-act="restore"]');
+  document.getElementById('rs').value=JSON.stringify({S:{topics:[],plan:[]},LOGS:[]});
+  click('#rsok');
+  assert.match(document.getElementById('toast').textContent,/válido/);
+  assert.equal(localStorage.getItem('fr_plano_v1'),beforeInvalid);
+  click('[data-act="mclose"]');
+  click('[data-act="backup"]');
+  assert.equal(JSON.parse(document.getElementById('bk').value).LOGS.length,1);
   dom.window.dispatchEvent(new dom.window.Event('pagehide'));
   dom.window.close();
 });
