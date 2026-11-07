@@ -1,3 +1,4 @@
+import { parseBackup } from './persistence.js';
 
 import './caderno.js';
 import { renderView, renderNavigation, renderDialog } from './renderer.jsx';
@@ -186,21 +187,21 @@ function setSave(st){const el=document.getElementById('saveState');if(!el)return
 function touch(...keys){keys.forEach(k=>dirty.add(k));clearTimeout(saveTimer);setSave('pend');saveTimer=setTimeout(flush,500)}
 function logKey(d){return 'logs_'+d.slice(0,7)}
 async function flush(){
+  clearTimeout(saveTimer);saveTimer=null;
   if(saving){saveTimer=setTimeout(flush,300);return}
   saving=true;
+  const pending=[...dirty];pending.forEach(k=>dirty.delete(k));
   try{
     if(MODE==='cloud'){
-      for(const k of [...dirty]){
-        dirty.delete(k);
+      for(const k of pending){
         if(k==='state')await COL.doc('state').set(S);
         else if(k.startsWith('logs_')){const m=k.slice(5);await COL.doc(k).set({items:LOGS.filter(l=>l.d.slice(0,7)===m)})}
       }
     }else{
-      dirty.clear();
       localStorage.setItem('fr_plano_v1',JSON.stringify({S,LOGS}));
     }
-    setSave('ok');
-  }catch(e){console.error(e);setSave('err');dirty.add('state')}
+    setSave(dirty.size?'pend':'ok');
+  }catch(e){console.error(e);setSave('err');pending.forEach(k=>dirty.add(k))}
   saving=false;
   if(dirty.size&&!saveTimer)saveTimer=setTimeout(flush,800);
 }
@@ -211,8 +212,8 @@ function saveLogs(d){const m=logKey(d);if(!S.logMonths.includes(m.slice(5))){S.l
 const IMGC=new Map();
 let idb=null;
 function idbOpen(){return new Promise((res,rej)=>{if(idb)return res(idb);const r=indexedDB.open('fr_plano_img',1);r.onupgradeneeded=()=>r.result.createObjectStore('i');r.onsuccess=()=>{idb=r.result;res(idb)};r.onerror=()=>rej(r.error)})}
-async function idbOp(mode,fn){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction('i',mode);const rq=fn(tx.objectStore('i'));tx.oncomplete=()=>res(rq?.result);tx.onerror=()=>rej(tx.error)})}
-async function putImg(id,data){IMGC.set(id,data);if(MODE==='cloud')await COL.doc('img_'+id).set({d:data});else await idbOp('readwrite',s=>s.put(data,id))}
+async function idbOp(mode,fn){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction('i',mode);const rq=fn(tx.objectStore('i'));tx.oncomplete=()=>res(rq?.result);tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error||new Error('Transação cancelada'))})}
+async function putImg(id,data){if(MODE==='cloud')await COL.doc('img_'+id).set({d:data});else await idbOp('readwrite',s=>s.put(data,id));IMGC.set(id,data)}
 async function getImg(id){
   if(IMGC.has(id))return IMGC.get(id);
   try{
@@ -235,9 +236,10 @@ async function loadAll(){
         COL=db.collection('data/users/'+id);MODE='cloud';
         const snap=await withTimeout(COL.doc('state').get(),10000);
         if(snap.exists){
-          S=snap.data();
-          const res=await withTimeout(Promise.all((S.logMonths||[]).map(m=>COL.doc('logs_'+m).get())),10000);
-          LOGS=res.flatMap(r=>r.exists?(r.data().items||[]):[]);
+          const state=snap.data();
+          const res=await withTimeout(Promise.all((state.logMonths||[]).map(m=>COL.doc('logs_'+m).get())),10000);
+          const loaded=parseBackup(JSON.stringify({S:state,LOGS:res.flatMap(r=>r.exists?(r.data().items||[]):[])}));
+          S=loaded.S;LOGS=loaded.LOGS;
         }
         cloudOk=true;
       }
@@ -245,7 +247,7 @@ async function loadAll(){
   }catch(e){console.error(e);warn='Não consegui falar com a sua conta agora. Estou usando o armazenamento deste aparelho, que não aparece em outros aparelhos.';MODE='local';COL=null}
   if(!cloudOk){
     MODE='local';
-    try{const raw=localStorage.getItem('fr_plano_v1');if(raw){const o=JSON.parse(raw);S=o.S;LOGS=o.LOGS||[]}}catch(e){}
+    const raw=localStorage.getItem('fr_plano_v1');if(raw){const o=parseBackup(raw);S=o.S;LOGS=o.LOGS}
     if(!warn&&!(window.claude&&window.claude.use))warn='';
   }
   if(!S){S=newState();LOGS=[];touch('state')}
@@ -735,7 +737,7 @@ function backupBanner(){
 function cadDue(){const hj=today();return cadAtivos().filter(i=>i.proximaRevisao<=hj).length}
 async function backupFile(){
   toast('Preparando o arquivo…');
-  const IMGS={};for(const m of S.imgs){const d=await getImg(m.id);if(d)IMGS[m.id]=d}
+  const IMGS={};for(const m of S.imgs){const d=await getImg(m.id);if(!d){toast('Backup não gerado: não foi possível ler uma imagem. Tente novamente.');return}IMGS[m.id]=d}
   const data=JSON.stringify({app:'plano-fernanda',v:2,exportadoEm:new Date().toISOString(),S,LOGS,IMGS});
   const blob=new Blob([data],{type:'application/json'});const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download='backup-plano-fernanda-'+today()+'.json';
@@ -752,18 +754,24 @@ function pickRestore(){
   inp.click();
 }
 async function restoreFrom(txt){
+  let writing=false;
   try{
-    const o=JSON.parse(txt);
-    if(!o.S||!o.S.topics||!o.S.plan||!Array.isArray(o.S.plan))throw new Error('formato');
-    S=o.S;LOGS=Array.isArray(o.LOGS)?o.LOGS:[];
+    const o=parseBackup(txt);
+    const IM=o.IMGS||{};
+    // Preserve existing images even when they have not been opened this session.
+    const imgs=[];for(const m of (o.S.imgs||[])){if(IM[m.id]||await getImg(m.id))imgs.push(m)}
+    writing=true;
+    if(MODE==='local'&&Object.keys(IM).length){
+      await idbOp('readwrite',store=>{for(const [id,data] of Object.entries(IM))store.put(data,id)});
+      for(const [id,data] of Object.entries(IM))IMGC.set(id,data);
+    }else for(const id of Object.keys(IM))await putImg(id,IM[id]);
+    S=o.S;LOGS=o.LOGS;S.imgs=imgs;
     S.wt=S.wt||{};S.sims=S.sims||[];S.imgs=S.imgs||[];S.exam=S.exam||EXAM_PADRAO;S.caderno=S.caderno||[];
     S.cadCfg=S.cadCfg||{intervalosCaderno:[1,3,7,14,30,60,90]};
-    const IM=o.IMGS||{};for(const id of Object.keys(IM))await putImg(id,IM[id]);
-    S.imgs=S.imgs.filter(m=>IM[m.id]||IMGC.has(m.id));
     migratePlan();
     S.logMonths=[...new Set(LOGS.map(l=>l.d.slice(0,7)))].sort();
-    touch('state',...S.logMonths.map(m=>'logs_'+m));render();toast('Backup restaurado.');
-  }catch(e){toast('Esse arquivo não parece um backup válido. Nada foi alterado.')}
+    touch('state',...S.logMonths.map(m=>'logs_'+m));closeModal();render();await flush();toast(dirty.size?'Restauração carregada, mas ainda não foi salva. Faça um backup e tente novamente.':'Backup restaurado.');
+  }catch(e){toast(writing?'Não foi possível concluir a restauração. Confira o armazenamento e tente novamente.':'Esse arquivo não parece um backup válido. Nada foi alterado.')}
 }
 document.addEventListener('click',ev=>{
   const el=ev.target.closest('[data-act="backupfile"],[data-act="restorefile"]');if(!el)return;
@@ -1215,11 +1223,7 @@ function backup(){
 }
 function restore(){
   openModal(`<h3>Restaurar cópia</h3><div class="small muted" style="margin:6px 0">Cole aqui o texto da cópia. Isso substitui o que está salvo agora.</div><textarea id="rs" style="min-height:160px"></textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" data-act="mclose">Cancelar</button><button class="btn pri" id="rsok">Restaurar</button></div>`);
-  document.getElementById('rsok').onclick=()=>{
-    try{const o=JSON.parse(document.getElementById('rs').value);if(!o.S||!o.S.topics||!o.S.plan)throw 0;S=o.S;LOGS=o.LOGS||[];S.imgs=(S.imgs||[]).filter(m=>IMGC.has(m.id));
-      S.logMonths=[...new Set(LOGS.map(l=>l.d.slice(0,7)))].sort();touch('state',...S.logMonths.map(m=>'logs_'+m));closeModal();render();toast('Cópia restaurada.')}
-    catch(e){toast('Esse texto não parece uma cópia válida.')}
-  };
+  document.getElementById('rsok').onclick=()=>restoreFrom(document.getElementById('rs').value);
 }
 
 document.addEventListener('click',async ev=>{
@@ -1311,11 +1315,22 @@ document.addEventListener('keydown',ev=>{
 
 /* ============ INÍCIO ============ */
 (async function(){
-  const warn=await loadAll();
+  let warn;
+  try{warn=await loadAll()}catch(e){
+    setSave('err');
+    renderView('<div class="banner">Não foi possível carregar o progresso salvo. Os dados originais foram preservados. Não limpe os dados do navegador; guarde uma cópia antes de tentar recuperar. <button class="btn" id="recoverSaved">Baixar dados originais</button></div>');
+    document.getElementById('recoverSaved').onclick=()=>{
+      try{const raw=localStorage.getItem('fr_plano_v1');if(raw===null)throw new Error('Sem dados');
+        const url=URL.createObjectURL(new Blob([raw],{type:'application/json'}));
+        const a=document.createElement('a');a.href=url;a.download='recuperacao-plano-fernanda.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);
+      }catch(e){toast('Não foi possível ler os dados deste navegador. Tente novamente.')}
+    };
+    return;
+  }
   const w0=curWeek();
   if(warn){document.getElementById('main').innerHTML=`<div class="banner">${warn}</div>`}
   render();
   if(warn){const m=document.getElementById('main');m.insertAdjacentHTML('afterbegin',`<div class="banner">${warn}</div>`)}
-  setSave('ok');
+  setSave(dirty.size?'pend':'ok');
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{})}catch(e){}
 })();
