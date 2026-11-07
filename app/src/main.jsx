@@ -9,10 +9,11 @@ function InstallStatus() {
   const [ready, setReady] = useState(false);
   const [update, setUpdate] = useState(false);
   const [help, setHelp] = useState(false);
+  const [installed, setInstalled] = useState(() => window.matchMedia?.('(display-mode: standalone)')?.matches || !!navigator.standalone);
   useEffect(() => {
     const onPrompt = e => { e.preventDefault(); setPrompt(e); };
     const onNetwork = () => setOffline(!navigator.onLine);
-    const onInstall = () => setPrompt(null);
+    const onInstall = () => { setPrompt(null); setInstalled(true); setHelp(false); };
     addEventListener('beforeinstallprompt', onPrompt);
     addEventListener('appinstalled', onInstall);
     addEventListener('online', onNetwork);
@@ -42,14 +43,34 @@ function InstallStatus() {
     await prompt.userChoice;
     setPrompt(null);
   }
-  return <div className="pwa-status">
-    <div className="row sp"><span role="status" className="muted small">{offline ? 'Sem conexão · dados salvos neste aparelho' : ready ? 'Disponível offline neste aparelho' : 'Dados salvos neste aparelho'}</span><button className="btn sm" onClick={install}>Instalar aplicativo</button></div>
-    {help && <p className="small">No Android ou computador, use “Instalar aplicativo” no menu do navegador. No iPhone, abra no Safari e toque em Compartilhar → Adicionar à Tela de Início. A opção depende do navegador.</p>}
-    {update && <p className="small" role="status">Uma atualização está pronta. Para aplicá-la, feche todas as abas e janelas do aplicativo e abra novamente.</p>}
-  </div>;
+  return <>
+    <div className="pwa-actions"><span role="status" className="muted small">{offline ? 'Sem conexão' : ready ? 'Offline disponível' : 'Plano de residência'}</span>{!installed && <button className="btn sm" aria-expanded={help} onClick={install}>Instalar<span className="sr-only"> aplicativo</span></button>}</div>
+    {help && <p className="install-help small">No Android ou computador, use “Instalar aplicativo” no menu do navegador. No iPhone, abra no Safari e toque em Compartilhar → Adicionar à Tela de Início. A opção depende do navegador.</p>}
+    {update && <p className="install-help small" role="status">Uma atualização está pronta. Para aplicá-la, feche todas as abas e janelas do aplicativo e abra novamente.</p>}
+  </>;
 }
 function App() {
-  return <><header className="top"><div className="top-in"><div className="brand"><b>Plano de Residência · Fernanda Rabello</b><span id="saveState" className="save" /></div><InstallStatus /><nav className="tabs" id="tabs" role="tablist" aria-label="Seções do plano" /></div></header><main id="main" /><div id="modal" /><div id="toast" role="status" /></>;
+  return <>
+    <a className="skip-link" href="#main">Ir para o conteúdo</a>
+    <header className="top">
+      <div className="top-in">
+        <div className="brand">
+          <div className="brand-identity">
+            <img src={`${import.meta.env.BASE_URL}icon-192.png`} width="42" height="42" alt="" />
+            <div>
+              <h1>Fernanda Plano</h1>
+              <span id="saveState" className="save" role="status" aria-live="polite" />
+            </div>
+          </div>
+          <InstallStatus />
+        </div>
+        <nav className="tabs" id="tabs" role="tablist" aria-label="Seções do plano" />
+      </div>
+    </header>
+    <main><div id="main" className="content" role="tabpanel" tabIndex={0} /></main>
+    <div id="modal" />
+    <div id="toast" role="status" />
+  </>;
 }
 flushSync(() => createRoot(document.getElementById('root')).render(<App />));
 import('./engine.js').catch(() => {

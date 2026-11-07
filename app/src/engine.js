@@ -348,7 +348,7 @@ function incChip(t){return `<span class="inc ${t.inc===3?'h':''}" title="Incidê
 function ckBtn(t,k,label){return `<button class="ck" aria-pressed="${!!t.ck[k]}" data-act="ck" data-id="${t.id}" data-k="${k}" title="${t.ck[k]?'Feito em '+fmtY(t.ck[k]):''}"><i></i>${label}</button>`}
 function topicBlock(t){
   const g=topicAgg(t.id);
-  return `<div class="trow"><div class="grow"><div class="nm" data-act="topic" data-id="${t.id}">${areaChip(t.a)} ${esc(t.n)}</div><div class="small muted" style="margin-top:3px">${incChip(t)}</div></div>
+  return `<div class="trow"><div class="grow"><button type="button" class="nm topic-link" data-act="topic" data-id="${t.id}">${areaChip(t.a)} ${esc(t.n)}</button><div class="small muted" style="margin-top:3px">${incChip(t)}</div></div>
   <div>${g.t?chipP(g,5):'<span class="chip">sem questões</span>'}</div>
   <div class="checks" style="grid-column:1/-1">${ckBtn(t,'aula','Assisti a aula')}${ckBtn(t,'resumo','Resumo à mão')}${ckBtn(t,'card','Card / ficha')}<button class="btn sm" data-act="logq" data-id="${t.id}">Registrar questões</button>${t.rev?`<span class="small muted" style="align-self:center">revisão: ${fmt(t.rev.next)}</span>`:''}</div></div>`;
 }
@@ -361,20 +361,20 @@ function vHoje(){
   const tot=agg(()=>true);
   const due=dueList();
   const head=started?`Semana ${wi+1} de ${S.plan.length} · ${PH[phaseOf(wi)]} · prova de referência em ${fmtY(S.exam)} (${diffDays(S.exam,td)} dias${S.exam===EXAM_PADRAO?", estimada":""})`:`O plano começa em ${fmtY(S.start)} (segunda). Dá para adiantar o que quiser.`;
-  let h=`${backupBanner()}<div><h2>Olá, Fernanda</h2><div class="muted">${head}</div><div class="row" style="margin-top:10px"><button class="btn pri" data-act="logq" data-id="" style="min-height:48px;font-size:16px">Registrar questões</button></div></div>
+  let h=`<section class="intro"><div class="intro-copy"><p class="eyebrow">Seu plano de residência</p><h2>Olá, Fernanda</h2><div class="muted">${head}</div></div><div class="row"><button class="btn pri" data-act="logq" data-id="" style="min-height:48px;font-size:16px">Registrar questões</button></div></section>
   <div class="tiles">
    <div class="tile"><div class="v">${done}/${S.topics.length}</div><div class="l">temas com aula, resumo e card</div></div>
    <div class="tile"><div class="v">${tot.t}</div><div class="l">questões feitas</div></div>
    <div class="tile"><div class="v">${pc(tot.p)}</div><div class="l">acerto geral (meta ${S.meta}%)</div></div>
    <div class="tile"><div class="v" style="color:${due.length?'var(--low)':'var(--ok)'}">${due.length}</div><div class="l">revisões para hoje</div></div>
    <div class="tile"><div class="v" style="color:${cadDue()?'var(--low)':'var(--ok)'}">${cadDue()}</div><div class="l">revisões do Caderno de Erros</div></div>
-  </div>`;
+  </div>${backupBanner()}`;
   h+=`<div class="card"><h3>Revisões de hoje</h3>`;
   if(!due.length){const up=upcoming(7);h+=`<div class="muted">Nenhuma revisão vencida. ${up.length?`Nos próximos 7 dias: ${up.slice(0,4).map(t=>esc(t.n)+' ('+fmt(t.rev.next)+')').join('; ')}${up.length>4?'…':''}.`:'As revisões aparecem aqui 7 dias depois que você concluir aula, resumo e card de um tema.'}</div>`}
   else{
     h+=`<div class="small muted" style="margin-bottom:6px">Faça questões do tema e registre o resultado: o intervalo da próxima revisão se ajusta sozinho. Se só releu o resumo, use Fácil, Ok ou Difícil.</div>`;
     due.slice(0,12).forEach(t=>{const late=diffDays(td,t.rev.next);
-      h+=`<div class="trow"><div class="grow"><div class="nm" data-act="topic" data-id="${t.id}">${areaChip(t.a)} ${esc(t.n)}</div><div class="small muted">${late>0?`atrasada ${late} dia${late>1?'s':''}`:'vence hoje'} · ${t.rev.n||0} revisão(ões) feitas</div></div>
+      h+=`<div class="trow"><div class="grow"><button type="button" class="nm topic-link" data-act="topic" data-id="${t.id}">${areaChip(t.a)} ${esc(t.n)}</button><div class="small muted">${late>0?`atrasada ${late} dia${late>1?'s':''}`:'vence hoje'} · ${t.rev.n||0} revisão(ões) feitas</div></div>
       <div class="row"><button class="btn sm pri" data-act="logq" data-id="${t.id}">Registrar questões</button></div>
       <div class="row" style="grid-column:1/-1"><span class="small muted">Só reli:</span><button class="btn sm" data-act="quickrev" data-id="${t.id}" data-r="1">Fácil</button><button class="btn sm" data-act="quickrev" data-id="${t.id}" data-r="0">Ok</button><button class="btn sm" data-act="quickrev" data-id="${t.id}" data-r="-1">Difícil</button></div></div>`});
     if(due.length>12)h+=`<div class="small muted" style="margin-top:6px">Mostrando 12 das ${due.length}. As mais atrasadas vêm primeiro.</div>`;
@@ -467,7 +467,7 @@ function vPlano(){
   ${planResumo()}<div class="small muted" style="margin-bottom:6px">Toque em uma semana para abri-la.</div>`;
   S.plan.forEach((p,i)=>{
     const pct=Math.round(weekPct(i)*100);
-    h+=`<div class="week-item ${i===curWeek()?'cur':''}" data-act="gowk" data-i="${i}"><b>S${i+1}</b><div><div>${esc(weekTitle(i))}</div><div class="small muted">${fmt(weekStart(i))} · ${PH[phaseOf(i)]}</div></div><span class="chip ${pct===100?'ok':''}">${pct}%</span></div>`;
+    h+=`<button type="button" class="week-item ${i===curWeek()?'cur':''}" data-act="gowk" data-i="${i}"><b>S${i+1}</b><span class="week-copy"><span>${esc(weekTitle(i))}</span><span class="small muted">${fmt(weekStart(i))} · ${PH[phaseOf(i)]}</span></span><span class="chip ${pct===100?'ok':''}">${pct}%</span></button>`;
   });
   return h+`</div>`;
 }
@@ -531,7 +531,7 @@ function vQuestoes(){
   }else{
     h+=`<div class="card"><h3>Registrar simulado</h3><div class="grid2"><label class="f">Nome<input type="text" id="sn" placeholder="Ex.: Simulado Enamed 2026"></label><label class="f">Data<input type="date" id="sd" value="${today()}"></label></div>
     <div class="small muted" style="margin:10px 0 6px">Preencha as áreas que o simulado cobriu (total de questões e acertos).</div>
-    ${AK.map(a=>`<div class="ldim"><span>${AREAS[a].n}</span><input type="number" min="0" id="st_${a}" placeholder="Total"><input type="number" min="0" id="sc_${a}" placeholder="Acertos"></div>`).join('')}
+    ${AK.map(a=>`<div class="ldim"><span>${AREAS[a].n}</span><input type="number" min="0" id="st_${a}" aria-label="Total de questões de ${AREAS[a].n}" placeholder="Total"><input type="number" min="0" id="sc_${a}" aria-label="Acertos em ${AREAS[a].n}" placeholder="Acertos"></div>`).join('')}
     <button class="btn pri" data-act="savesim" style="margin-top:8px">Salvar simulado</button></div>`;
     h+=`<div class="card"><h3>Simulados feitos</h3>${S.sims.length?`<div class="scroll-x"><table><thead><tr><th>Data</th><th>Nome</th>${AK.map(a=>`<th class="num">${a}</th>`).join('')}<th class="num">Total</th><th></th></tr></thead><tbody>${[...S.sims].sort((a,b)=>b.d.localeCompare(a.d)).map(s=>{let t=0,c=0;AK.forEach(a=>{if(s.sc[a]){t+=s.sc[a][0];c+=s.sc[a][1]}});return `<tr><td>${fmt(s.d)}</td><td>${esc(s.n)}</td>${AK.map(a=>`<td class="num">${s.sc[a]?pc(s.sc[a][1]/s.sc[a][0]):'–'}</td>`).join('')}<td class="num"><b>${pc(t?c/t:null)}</b></td><td><button class="btn sm dng" data-act="delsim" data-id="${s.id}">Excluir</button></td></tr>`}).join('')}</tbody></table></div>`:'<div class="muted">Nenhum simulado registrado.</div>'}</div>`;
   }
@@ -812,7 +812,7 @@ function cadCopiar(texto,rotulo){
     ta.style.cssText='position:fixed;opacity:0;top:0;left:0';document.body.appendChild(ta);ta.select();
     let done=false;try{done=document.execCommand('copy')}catch(e){}
     ta.remove();
-    if(done)ok();else openModal(`<h3>Copie o texto abaixo</h3><textarea style="min-height:220px" readonly id="cadfb">${esc(texto)}</textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn pri" data-act="mclose">Fechar</button></div>`);
+    if(done)ok();else openModal(`<h3>Copie o texto abaixo</h3><textarea style="min-height:220px" readonly aria-label="Texto para copiar" id="cadfb">${esc(texto)}</textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn pri" data-act="mclose">Fechar</button></div>`);
   };
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(texto).then(ok,fallback);else fallback();
 }
@@ -916,7 +916,7 @@ function cadFormHtml(r,assuntoId){
    <label class="f">Alternativa correta<input type="text" id="cd-cor" maxlength="1" value="${esc(r.alternativa_correta)}"></label>
    <label class="f">Gabarito<select id="cd-stat">${['oficial','proposto','indeterminado'].map(s=>`<option ${s===r.status_gabarito?'selected':''}>${s}</option>`).join('')}</select></label></div>
   <div class="small muted" style="margin:12px 0 4px">Tipo de erro (pode marcar mais de um)</div>
-  ${CN.TIPOS_ERRO.map(t=>`<label class="row small" style="min-height:36px"><input type="checkbox" name="cd-tipo" value="${esc(t)}" ${tp.includes(t)?'checked':''} style="width:20px;height:20px"> ${esc(t)}</label>`).join('')}
+  ${CN.TIPOS_ERRO.map(t=>`<label class="row small" style="min-height:44px"><input type="checkbox" name="cd-tipo" value="${esc(t)}" ${tp.includes(t)?'checked':''} style="width:20px;height:20px"> ${esc(t)}</label>`).join('')}
   <label class="f" style="margin-top:10px">Explicação resumida<textarea id="cd-expl" rows="3">${esc(r.explicacao_resumida)}</textarea></label>
   <label class="f" style="margin-top:10px">Motivo do erro<textarea id="cd-motivo" rows="2">${esc(r.motivo_do_erro)}</textarea></label>
   <label class="f" style="margin-top:10px">Explicação da alternativa correta<textarea id="cd-certa" rows="3">${esc(r.explicacao_alternativa_correta)}</textarea></label>
@@ -1119,7 +1119,7 @@ function qBig(f,label){
   const b='style="width:56px;height:56px;font-size:26px;flex:0 0 auto"';
   return `<div><div class="small muted" style="margin-bottom:4px">${label}</div>
     <div class="row" style="flex-wrap:nowrap;gap:8px"><button type="button" class="btn" data-q="step" data-f="${f}" data-d="-1" aria-label="menos um" ${b}>−</button>
-    <input type="number" id="${f}" inputmode="numeric" min="0" placeholder="0" style="height:56px;font-size:26px;text-align:center;min-width:0">
+    <input type="number" id="${f}" aria-label="${label}" inputmode="numeric" min="0" placeholder="0" style="height:56px;font-size:26px;text-align:center;min-width:0">
     <button type="button" class="btn" data-q="step" data-f="${f}" data-d="1" aria-label="mais um" ${b}>+</button></div>
     <div class="row" style="margin-top:8px">${f==='qt'?[10,20,30,50].map(n=>`<button type="button" class="btn sm" data-q="set" data-f="qt" data-v="${n}">${n}</button>`).join(''):'<button type="button" class="btn sm" data-q="all">Acertei todas</button>'}</div></div>`;
 }
@@ -1137,7 +1137,7 @@ function logForm(tid){
   <details style="margin-top:12px"><summary class="small muted">Separar por tipo de pergunta (opcional)</summary>
    <div class="small muted" style="margin:8px 0">Se preencher aqui, os números de cima são ignorados. Útil para o app mostrar se você vai melhor em diagnóstico ou em tratamento.</div>
    <div class="ldim"><span class="small muted">Tipo</span><span class="small muted" style="text-align:center">Total</span><span class="small muted" style="text-align:center">Acertos</span></div>
-   ${DK.map(d=>`<div class="ldim"><span>${DIMS[d]}</span><input type="number" min="0" inputmode="numeric" id="lt_${d}"><input type="number" min="0" inputmode="numeric" id="lc_${d}"></div>`).join('')}</details>
+   ${DK.map(d=>`<div class="ldim"><span>${DIMS[d]}</span><input type="number" min="0" inputmode="numeric" id="lt_${d}" aria-label="Total de questões: ${DIMS[d]}"><input type="number" min="0" inputmode="numeric" id="lc_${d}" aria-label="Acertos: ${DIMS[d]}"></div>`).join('')}</details>
   <div class="row" style="margin-top:16px"><button class="btn pri" data-act="savelog" style="min-height:52px;font-size:17px;flex:1 1 auto">Salvar</button><button class="btn" data-act="mclose">Cancelar</button></div></div>`;
 }
 function qPctUpdate(){
@@ -1218,11 +1218,11 @@ function quickRev(id,r){
 }
 function backup(){
   const data=JSON.stringify({S,LOGS});
-  openModal(`<h3>Cópia de segurança</h3><div class="small muted" style="margin:6px 0">Selecione tudo, copie e guarde em um lugar seguro (e-mail para você mesma, por exemplo). As imagens não entram.</div><textarea id="bk" style="min-height:160px" readonly>${esc(data)}</textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" id="bkc">Copiar</button><button class="btn pri" data-act="mclose">Fechar</button></div>`);
+  openModal(`<h3>Cópia de segurança</h3><div class="small muted" style="margin:6px 0">Selecione tudo, copie e guarde em um lugar seguro (e-mail para você mesma, por exemplo). As imagens não entram.</div><textarea id="bk" aria-label="Texto do backup" style="min-height:160px" readonly>${esc(data)}</textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" id="bkc">Copiar</button><button class="btn pri" data-act="mclose">Fechar</button></div>`);
   document.getElementById('bkc').onclick=async()=>{const ta=document.getElementById('bk');ta.select();try{await navigator.clipboard.writeText(ta.value);toast('Copiado.')}catch(e){toast('Selecionei o texto: copie com Ctrl+C ou segurando o dedo.')}};
 }
 function restore(){
-  openModal(`<h3>Restaurar cópia</h3><div class="small muted" style="margin:6px 0">Cole aqui o texto da cópia. Isso substitui o que está salvo agora.</div><textarea id="rs" style="min-height:160px"></textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" data-act="mclose">Cancelar</button><button class="btn pri" id="rsok">Restaurar</button></div>`);
+  openModal(`<h3>Restaurar cópia</h3><div class="small muted" style="margin:6px 0">Cole aqui o texto da cópia. Isso substitui o que está salvo agora.</div><textarea id="rs" aria-label="Cole o texto do backup" style="min-height:160px"></textarea><div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn" data-act="mclose">Cancelar</button><button class="btn pri" id="rsok">Restaurar</button></div>`);
   document.getElementById('rsok').onclick=()=>restoreFrom(document.getElementById('rs').value);
 }
 
