@@ -1,0 +1,55 @@
+name: Validar e publicar PWA
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Instalar dependências
+        run: npm ci
+        working-directory: app
+      - name: Compilar PWA
+        run: npm run build
+        working-directory: app
+      - name: Testar aplicação, servidor e offline
+        run: npm test
+        working-directory: app
+      - name: Construir e testar container
+        run: |
+          docker build -t fernanda-plano:ci ./app
+          docker run -d --name fernanda-ci -p 3000:3000 fernanda-plano:ci
+          trap 'docker rm -f fernanda-ci' EXIT
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:3000/api/health; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:3000/api/health
+          curl -fsS http://localhost:3000/manifest.webmanifest
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar
+        id: deployment
+        uses: actions/deploy-pages@v4
