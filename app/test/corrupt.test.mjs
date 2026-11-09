@@ -2,14 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { indexedDB } from 'fake-indexeddb';
 test('dados corrompidos na abertura são preservados e oferecem exportação para recuperação',async()=>{
   const dom=new JSDOM('<div id="root"></div>',{url:'https://example.test/FernandaPlano/',pretendToBeVisual:true});
   for(const key of ['window','document','navigator','location','localStorage','HTMLElement','Element','Node','MutationObserver','DOMParser','Event','MouseEvent']) Object.defineProperty(globalThis,key,{configurable:true,value:key==='window'?dom.window:dom.window[key]});
   globalThis.addEventListener=dom.window.addEventListener.bind(dom.window);
   globalThis.removeEventListener=dom.window.removeEventListener.bind(dom.window);
+  globalThis.indexedDB=indexedDB;
+  globalThis.fetch=async url=>String(url).endsWith('.wasm')?new Response(await fs.readFile('dist/assets/'+String(url).split('/').pop())):Response.json({ok:true});
   localStorage.setItem('fr_plano_v1','{"S":corrompido');
   const index=await fs.readFile('dist/index.html','utf8');
   await import(new URL('../dist/'+index.match(/src="\.\/(assets\/[^" ]+\.js)"/)[1],import.meta.url));
+  document.getElementById('password').value='test-unlock';document.querySelector('button[type=submit]').click();
   for(let i=0;i<100&&!document.querySelector('#recoverSaved');i++)await new Promise(r=>setTimeout(r,20));
   assert.ok(document.querySelector('#recoverSaved'));
   await new Promise(r=>setTimeout(r,600));

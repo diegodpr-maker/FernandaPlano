@@ -1,4 +1,6 @@
 import { parseBackup } from './persistence.js';
+import { localDB } from './local-db.js';
+import { registerSyncHooks, syncNow } from './sync.js';
 
 import './caderno.js';
 import { renderView, renderNavigation, renderDialog } from './renderer.jsx';
@@ -179,80 +181,62 @@ const weekStart=i=>addDays(S.start,i*7);
 function curWeek(){const d=diffDays(today(),S.start);return Math.min(S.plan.length-1,Math.max(0,Math.floor(d/7)))}
 
 /* ============ PERSISTÊNCIA ============ */
-let MODE='local',COL=null;
+let MODE='local';
 const dirty=new Set();let saving=false,saveTimer=null;
-function setSave(st){const el=document.getElementById('saveState');if(!el)return;
-  el.className='save'+(st==='err'?' err':'');
-  el.textContent=st==='pend'?'Salvando…':st==='err'?'Não foi possível salvar. Tente de novo':(MODE==='cloud'?'Salvo na sua conta':'Salvo neste aparelho');}
-function touch(...keys){keys.forEach(k=>dirty.add(k));clearTimeout(saveTimer);setSave('pend');saveTimer=setTimeout(flush,500)}
+let savePromise=Promise.resolve();
+const IMGC=new Map();
+function setSave(st){const el=document.getElementById('saveState');if(!el)return;el.className='save'+(st==='err'?' err':'');el.textContent=st==='pend'?'Salvando…':st==='err'?'Falha ao gravar. Exporte um backup antes de fechar.':'Salvo no SQLite deste aparelho';}
+function touch(...keys){
+ keys.forEach(k=>dirty.add(k));
+ try{localStorage.setItem('fr_pending_v2',JSON.stringify({S,LOGS}));}catch{}
+ clearTimeout(saveTimer);setSave('pend');saveTimer=setTimeout(()=>flush().catch(()=>{}),300);
+}
 function logKey(d){return 'logs_'+d.slice(0,7)}
+function payload(){return JSON.parse(JSON.stringify({S,LOGS,IMGS:Object.fromEntries(IMGC)}));}
 async function flush(){
-  clearTimeout(saveTimer);saveTimer=null;
-  if(saving){saveTimer=setTimeout(flush,300);return}
-  saving=true;
-  const pending=[...dirty];pending.forEach(k=>dirty.delete(k));
+ clearTimeout(saveTimer);saveTimer=null;
+ if(saving){await savePromise;if(dirty.size)return flush();return;}
+ if(!dirty.size)return;
+ saving=true;const keys=[...dirty];dirty.clear();const data=payload();
+ const journal=localStorage.getItem('fr_pending_v2');
+ savePromise=(async()=>{
   try{
-    if(MODE==='cloud'){
-      for(const k of pending){
-        if(k==='state')await COL.doc('state').set(S);
-        else if(k.startsWith('logs_')){const m=k.slice(5);await COL.doc(k).set({items:LOGS.filter(l=>l.d.slice(0,7)===m)})}
-      }
-    }else{
-      localStorage.setItem('fr_plano_v1',JSON.stringify({S,LOGS}));
-    }
-    setSave(dirty.size?'pend':'ok');
-  }catch(e){console.error(e);setSave('err');pending.forEach(k=>dirty.add(k))}
-  saving=false;
-  if(dirty.size&&!saveTimer)saveTimer=setTimeout(flush,800);
+   await localDB.save(data);
+   try{localStorage.setItem('fr_plano_v1',JSON.stringify({S:data.S,LOGS:data.LOGS}));if(localStorage.getItem('fr_pending_v2')===journal)localStorage.removeItem('fr_pending_v2');}catch{}
+   setSave(dirty.size?'pend':'ok');
+  }catch(e){keys.forEach(k=>dirty.add(k));setSave('err');console.error(e);throw e;}
+  finally{saving=false;}
+ })();await savePromise;
+ if(dirty.size)saveTimer=setTimeout(()=>flush().catch(()=>{}),300);
 }
 const saveAll=()=>{S.logMonths=[...new Set(LOGS.map(l=>l.d.slice(0,7)))].sort();touch('state')};
 function saveLogs(d){const m=logKey(d);if(!S.logMonths.includes(m.slice(5))){S.logMonths.push(m.slice(5));S.logMonths.sort()}touch('state',m)}
-
-/* imagens */
-const IMGC=new Map();
-let idb=null;
-function idbOpen(){return new Promise((res,rej)=>{if(idb)return res(idb);const r=indexedDB.open('fr_plano_img',1);r.onupgradeneeded=()=>r.result.createObjectStore('i');r.onsuccess=()=>{idb=r.result;res(idb)};r.onerror=()=>rej(r.error)})}
-async function idbOp(mode,fn){const db=await idbOpen();return new Promise((res,rej)=>{const tx=db.transaction('i',mode);const rq=fn(tx.objectStore('i'));tx.oncomplete=()=>res(rq?.result);tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error||new Error('Transação cancelada'))})}
-async function putImg(id,data){if(MODE==='cloud')await COL.doc('img_'+id).set({d:data});else await idbOp('readwrite',s=>s.put(data,id));IMGC.set(id,data)}
-async function getImg(id){
-  if(IMGC.has(id))return IMGC.get(id);
-  try{
-    let d=null;
-    if(MODE==='cloud'){const s=await COL.doc('img_'+id).get();d=s.exists?s.data().d:null}
-    else d=await idbOp('readonly',s=>s.get(id));
-    if(d)IMGC.set(id,d);return d;
-  }catch(e){return null}
+async function putImg(id,data){const previous=IMGC.get(id);IMGC.set(id,data);touch('state');try{await flush();}catch(e){if(previous===undefined)IMGC.delete(id);else IMGC.set(id,previous);throw e;}}
+async function getImg(id){return IMGC.get(id)||null;}
+async function delImg(id){IMGC.delete(id);touch('state');}
+function applyPayload(data){
+ if(!data)return;S=data.S;LOGS=data.LOGS||[];IMGC.clear();for(const [id,value] of Object.entries(data.IMGS||{}))IMGC.set(id,value);
 }
-async function delImg(id){IMGC.delete(id);try{if(MODE==='cloud')await COL.doc('img_'+id).delete();else await idbOp('readwrite',s=>s.delete(id))}catch(e){}}
-
+async function migrateImages(){
+ if(!S?.imgs?.length)return;
+ const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('fr_plano_img',1);r.onupgradeneeded=()=>r.result.createObjectStore('i');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
+ try{for(const item of S.imgs){if(IMGC.has(item.id))continue;const value=await new Promise((resolve,reject)=>{const tx=db.transaction('i','readonly');const r=tx.objectStore('i').get(item.id);tx.oncomplete=()=>resolve(r.result);tx.onerror=()=>reject(tx.error)});if(value)IMGC.set(item.id,value);}}finally{db.close();}
+}
 async function loadAll(){
-  const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),ms))]);
-  let cloudOk=false,warn='';
-  try{
-    if(window.claude&&window.claude.use){
-      const [db,user]=await withTimeout(Promise.all([window.claude.use('db'),window.claude.use('user')]),10000);
-      const id=user?await user.id():null;
-      if(db&&id){
-        COL=db.collection('data/users/'+id);MODE='cloud';
-        const snap=await withTimeout(COL.doc('state').get(),10000);
-        if(snap.exists){
-          const state=snap.data();
-          const res=await withTimeout(Promise.all((state.logMonths||[]).map(m=>COL.doc('logs_'+m).get())),10000);
-          const loaded=parseBackup(JSON.stringify({S:state,LOGS:res.flatMap(r=>r.exists?(r.data().items||[]):[])}));
-          S=loaded.S;LOGS=loaded.LOGS;
-        }
-        cloudOk=true;
-      }
-    }
-  }catch(e){console.error(e);warn='Não consegui falar com a sua conta agora. Estou usando o armazenamento deste aparelho, que não aparece em outros aparelhos.';MODE='local';COL=null}
-  if(!cloudOk){
-    MODE='local';
-    const raw=localStorage.getItem('fr_plano_v1');if(raw){const o=parseBackup(raw);S=o.S;LOGS=o.LOGS}
-    if(!warn&&!(window.claude&&window.claude.use))warn='';
-  }
-  if(!S){S=newState();LOGS=[];touch('state')}
-  S.wt=S.wt||{};S.sims=S.sims||[];S.imgs=S.imgs||[];S.logMonths=S.logMonths||[];S.exam=S.exam||EXAM_PADRAO;S.caderno=S.caderno||[];S.cadCfg=S.cadCfg||{intervalosCaderno:[1,3,7,14,30,60,90]};migratePlan();
-  return warn;
+ const saved=await localDB.load();
+ if(saved.payload)applyPayload(saved.payload);
+ else{const raw=localStorage.getItem('fr_plano_v1');if(raw)applyPayload(parseBackup(raw));}
+ const journal=localStorage.getItem('fr_pending_v2');
+ if(journal){const pending=JSON.parse(journal);S=pending.S;LOGS=pending.LOGS||[];}
+ if(!S){S=newState();LOGS=[];}
+ await migrateImages();
+ S.wt=S.wt||{};S.sims=S.sims||[];S.imgs=S.imgs||[];S.logMonths=S.logMonths||[];S.exam=S.exam||EXAM_PADRAO;S.caderno=S.caderno||[];S.cadCfg=S.cadCfg||{intervalosCaderno:[1,3,7,14,30,60,90]};migratePlan();
+ if(!saved.payload||journal){touch('state');await flush();}
+ registerSyncHooks({flush,apply(data){applyPayload(data);render();setSave('ok');}});
+ window.addEventListener('online',()=>syncNow());
+ const syncTimer=setInterval(()=>syncNow(),60000);
+ window.addEventListener('pagehide',()=>clearInterval(syncTimer),{once:true});
+ return '';
 }
 
 /* ============ CÁLCULOS ============ */
@@ -754,25 +738,23 @@ function pickRestore(){
   inp.click();
 }
 async function restoreFrom(txt){
-  let writing=false;
-  try{
-    const o=parseBackup(txt);
-    const IM=o.IMGS||{};
-    // Preserve existing images even when they have not been opened this session.
-    const imgs=[];for(const m of (o.S.imgs||[])){if(IM[m.id]||await getImg(m.id))imgs.push(m)}
-    writing=true;
-    if(MODE==='local'&&Object.keys(IM).length){
-      await idbOp('readwrite',store=>{for(const [id,data] of Object.entries(IM))store.put(data,id)});
-      for(const [id,data] of Object.entries(IM))IMGC.set(id,data);
-    }else for(const id of Object.keys(IM))await putImg(id,IM[id]);
-    S=o.S;LOGS=o.LOGS;S.imgs=imgs;
-    S.wt=S.wt||{};S.sims=S.sims||[];S.imgs=S.imgs||[];S.exam=S.exam||EXAM_PADRAO;S.caderno=S.caderno||[];
-    S.cadCfg=S.cadCfg||{intervalosCaderno:[1,3,7,14,30,60,90]};
-    migratePlan();
-    S.logMonths=[...new Set(LOGS.map(l=>l.d.slice(0,7)))].sort();
-    touch('state',...S.logMonths.map(m=>'logs_'+m));closeModal();render();await flush();toast(dirty.size?'Restauração carregada, mas ainda não foi salva. Faça um backup e tente novamente.':'Backup restaurado.');
-  }catch(e){toast(writing?'Não foi possível concluir a restauração. Confira o armazenamento e tente novamente.':'Esse arquivo não parece um backup válido. Nada foi alterado.')}
+ let next;
+ try{
+  const o=parseBackup(txt);
+  if(!Array.isArray(o.S?.topics)||!o.S.topics.length||!Array.isArray(o.S?.plan)||!/^\d{4}-\d{2}-\d{2}$/.test(o.S.start)||!o.S.topics.every(t=>t&&typeof t.id==='string'&&t.ck&&typeof t.ck==='object')||!Array.isArray(o.LOGS||[])||!(o.LOGS||[]).every(l=>typeof l.d==='string'&&Number.isFinite(l.t)&&Number.isFinite(l.c)))throw Error('formato');
+  const state=o.S;state.wt||={};state.sims||=[];state.imgs||=[];state.exam||=EXAM_PADRAO;state.caderno||=[];state.cadCfg||={intervalosCaderno:[1,3,7,14,30,60,90]};
+  if((state.v||1)<4||!state.plan.every(w=>Array.isArray(w.r))){state.plan=genPlan(state.topics,planDims(state.start,state.exam));state.wt={};state.v=4;}
+  const images={...Object.fromEntries(IMGC),...(o.IMGS||{})};state.imgs=state.imgs.filter(m=>images[m.id]);
+  state.logMonths=[...new Set((o.LOGS||[]).map(l=>l.d.slice(0,7)))].sort();
+  next={S:state,LOGS:o.LOGS||[],IMGS:images};
+ }catch{toast('Backup inválido. Seus dados atuais foram mantidos.');return;}
+ try{
+  await flush();await localDB.save(next);applyPayload(next);
+  try{localStorage.setItem('fr_plano_v1',JSON.stringify({S,LOGS}));localStorage.removeItem('fr_pending_v2');}catch{}
+  closeModal();render();setSave('ok');toast('Backup restaurado.');
+ }catch{toast('Não foi possível gravar o backup no SQLite. Seus dados atuais foram mantidos.');}
 }
+
 document.addEventListener('click',ev=>{
   const el=ev.target.closest('[data-act="backupfile"],[data-act="restorefile"]');if(!el)return;
   if(el.dataset.act==='backupfile')backupFile();else pickRestore();
@@ -1305,7 +1287,7 @@ document.addEventListener('change',ev=>{
   if(id==='tq'||id==='ta'||id==='ts'){TF.q=document.getElementById('tq').value;TF.a=document.getElementById('ta').value;TF.s=document.getElementById('ts').value;render()}
   if(id==='la'||id==='lti'||id==='lg'){LIBF.a=document.getElementById('la').value;LIBF.t=document.getElementById('lti').value;LIBF.tag=document.getElementById('lg').value;if(id==='la')LIBF.t='';render()}
 });
-function flushNow(){if(dirty.size){clearTimeout(saveTimer);saveTimer=null;flush()}}
+function flushNow(){if(dirty.size){clearTimeout(saveTimer);saveTimer=null;flush().catch(()=>{})}}
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushNow()});
 window.addEventListener('pagehide',flushNow);
 document.addEventListener('keydown',ev=>{

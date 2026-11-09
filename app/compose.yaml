@@ -5,7 +5,14 @@ services:
       - "3000:3000"
     restart: unless-stopped
     read_only: true
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Configure a senha no arquivo .env}
+      SESSION_SECRET: ${SESSION_SECRET:?Configure um segredo aleatorio no arquivo .env}
+    volumes:
+      - fernanda-data:/app/data
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+volumes:
+  fernanda-data:

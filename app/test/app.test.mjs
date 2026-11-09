@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { indexedDB } from 'fake-indexeddb';
+import { openDatabase } from '../node-db.mjs';
+import { handleApi } from '../api.mjs';
+import initSQL from 'sql.js';
 
-test('preserva registros, navega nas nove telas, salva questões e restaura backup', async () => {
+test('preserva registros, navega nas nove telas, salva questões e restaura backup', async t => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://example.test/FernandaPlano/', pretendToBeVisual: true });
   for (const key of ['window','document','navigator','location','localStorage','HTMLElement','Element','Node','MutationObserver','DOMParser','Event','MouseEvent']) {
     Object.defineProperty(globalThis, key, { configurable: true, value: key === 'window' ? dom.window : dom.window[key] });
@@ -11,11 +15,31 @@ test('preserva registros, navega nas nove telas, salva questões e restaura back
   globalThis.addEventListener = dom.window.addEventListener.bind(dom.window);
   globalThis.removeEventListener = dom.window.removeEventListener.bind(dom.window);
   dom.window.scrollTo = () => {};
+  globalThis.indexedDB=indexedDB;
+  const database=openDatabase(':memory:');
+  t.after(()=>{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close();database.close();});
+  let cookie='';
+  globalThis.fetch=async (url,options={})=>{
+    if(String(url).endsWith('.wasm')){const filename=String(url).split('/').pop();return new Response(await fs.readFile('dist/assets/'+filename));}
+    const headers=new Headers(options.headers);if(cookie)headers.set('cookie',cookie);
+    const response=await handleApi(new Request('https://example.test'+url,{...options,headers}),{DB:database,APP_PASSWORD:'test-unlock',SESSION_SECRET:'test-session-secret'});
+    if(response.headers.get('set-cookie'))cookie=response.headers.get('set-cookie').split(';')[0];
+    return response;
+  };
   const index = await fs.readFile('dist/index.html','utf8');
   const entry = index.match(/src="\.\/(assets\/[^" ]+\.js)"/)[1];
   await import(new URL('../dist/' + entry, import.meta.url));
   const wait = async fn => { for(let i=0;i<100;i++){ if(fn()) return; await new Promise(r=>setTimeout(r,30)); } assert.fail('Tela não ficou pronta: '+document.body.textContent.slice(0,500)); };
   const click = selector => { const el = document.querySelector(selector); assert.ok(el, selector); el.click(); };
+  assert.ok(document.getElementById('password'));
+  assert.equal(document.querySelector('[data-k="hoje"]'),null);
+  document.getElementById('password').value = 'incorrect-test';
+  click('button[type="submit"]');
+  await wait(() => document.querySelector('[role="alert"]'));
+  assert.match(document.querySelector('[role="alert"]').textContent,/Senha incorreta/);
+  assert.equal(document.querySelector('[data-k="hoje"]'),null);
+  document.getElementById('password').value = 'test-unlock';
+  click('button[type="submit"]');
   await wait(() => document.querySelector('[data-k="hoje"]'));
   assert.match(document.querySelector('main').textContent, /Olá, Fernanda/);
   const firstTab=document.getElementById('tab-hoje');
@@ -35,7 +59,7 @@ test('preserva registros, navega nas nove telas, salva questões e restaura back
   assert.equal(document.activeElement,topicButton);
   assert.equal(document.querySelector('main').hasAttribute('inert'),false);
   click('[data-act="ck"]');
-  await wait(() => localStorage.getItem('fr_plano_v1'));
+  await wait(() => JSON.parse(localStorage.getItem('fr_plano_v1')||'{}').S?.topics.some(t=>Object.values(t.ck).some(Boolean)));
   const saved = JSON.parse(localStorage.getItem('fr_plano_v1'));
   assert.ok(saved.S.topics.some(t => t.ck.a || Object.values(t.ck).some(Boolean)));
   for (const k of ['plano','temas','questoes','caderno','desempenho','biblioteca','editais','config','hoje']) {
@@ -51,26 +75,37 @@ test('preserva registros, navega nas nove telas, salva questões e restaura back
   const withLog = JSON.parse(localStorage.getItem('fr_plano_v1'));
   assert.equal(withLog.LOGS[0].t,20);
   assert.equal(withLog.LOGS[0].c,15);
+  const syncButton=()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='Sincronizar agora');
+  syncButton().click();
+  await wait(()=>document.body.textContent.includes('Gravado no SQLite online'));
+  const online=await (await fetch('/api/sync')).json();
+  assert.equal(online.payload.LOGS[0].t,20);
+  const remotePayload=structuredClone(online.payload);
+  remotePayload.LOGS.push({...remotePayload.LOGS[0],id:'from-another-device',t:10,c:9});
+  const remoteWrite=await fetch('/api/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base:online.revision,mutationId:'another-device-000001',payload:remotePayload})});
+  assert.equal(remoteWrite.status,200);
+  syncButton().click();
+  await wait(()=>document.body.textContent.includes('Dados online atualizados'));
+  const file=await new Promise((resolve,reject)=>{const r=indexedDB.open('fr_sqlite_v1',1);r.onsuccess=()=>{const tx=r.result.transaction('files','readonly');const q=tx.objectStore('files').get('database');tx.oncomplete=()=>{r.result.close();resolve(q.result.bytes);};};r.onerror=()=>reject(r.error);});
+  assert.equal(new TextDecoder().decode(file.slice(0,15)),'SQLite format 3');
+  const SQL=await initSQL();const reopened=new SQL.Database(file);
+  const stored=JSON.parse(reopened.exec("SELECT value FROM records WHERE key='payload'")[0].values[0][0]);
+  assert.equal(stored.LOGS.length,2);reopened.close();
   click('[data-k="config"]');
   click('[data-act="backup"]');
   const backup = document.getElementById('bk').value;
-  assert.equal(JSON.parse(backup).LOGS.length,1);
+  assert.equal(JSON.parse(backup).LOGS.length,2);
   click('[data-act="mclose"]');
   click('[data-act="restore"]');
   const textarea = document.querySelector('#modal textarea');
   textarea.value = backup;
   click('#rsok');
-  await wait(() => /restaurad|importad/i.test(document.getElementById('toast').textContent));
-  const beforeInvalid=localStorage.getItem('fr_plano_v1');
+  await wait(()=>document.getElementById('toast').textContent.includes('Backup restaurado'));
+  assert.match(document.getElementById('toast').textContent,/restaurad|importad/i);
   click('[data-act="restore"]');
-  document.getElementById('rs').value=JSON.stringify({S:{topics:[],plan:[]},LOGS:[]});
+  document.querySelector('#modal textarea').value=JSON.stringify({S:{topics:[],plan:[]},LOGS:[]});
   click('#rsok');
-  assert.match(document.getElementById('toast').textContent,/válido/);
-  assert.equal(localStorage.getItem('fr_plano_v1'),beforeInvalid);
-  click('[data-act="mclose"]');
-  click('[data-act="backup"]');
-  assert.equal(JSON.parse(document.getElementById('bk').value).LOGS.length,1);
-  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
-  dom.window.close();
+  assert.match(document.getElementById('toast').textContent,/inválido/);
+  assert.equal(JSON.parse(localStorage.getItem('fr_plano_v1')).LOGS.length,2);
 });
 

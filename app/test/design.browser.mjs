@@ -5,6 +5,10 @@ import { AxeBuilder } from '@axe-core/playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { server } from '../server.mjs';
+process.env.APP_PASSWORD='design-fixture';
+process.env.SESSION_SECRET='design-test-session';
+process.env.DB_PATH=':memory:';
+async function login(page){await page.locator('#password').fill('design-fixture');await page.getByRole('button',{name:'Entrar',exact:true}).click();await page.locator('#tab-hoje').waitFor();}
 const sections=['hoje','plano','temas','questoes','caderno','desempenho','biblioteca','editais','config'];
 const results=[];let browser;
 const screenshotDir=process.env.DESIGN_SCREENSHOTS;
@@ -32,7 +36,7 @@ try{
  for(const width of [320,390,768,1440])for(const theme of ['light','dark']){
   const context=await browser.newContext({viewport:{width,height:900},colorScheme:theme,serviceWorkers:'block'});
   const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(base);await page.locator('#tab-hoje').waitFor();
+  await page.goto(base);await login(page);
   await page.waitForFunction(()=>!!localStorage.getItem('fr_plano_v1'));
   for(const section of sections){
    await page.locator(`#tab-${section}`).click();const label=`${width}/${theme}/${section}`;
@@ -47,9 +51,9 @@ try{
     data.S.topics.slice(0,3).forEach(t=>{t.ck={aula:'2026-10-20',resumo:'2026-10-21',card:'2026-10-22'};t.rev={stage:1,last:'2026-10-22',next:'2026-10-29',n:2}});
     data.LOGS=data.S.topics.slice(0,5).map((t,i)=>({id:'demo-'+i,tp:t.id,a:t.a,d:'2026-11-07',dim:'G',t:20,c:12+i}));
     data.S.sims=[{id:'demo-sim',d:'2026-11-06',n:'Simulado de teste',sc:{CM:[20,15],CG:[20,12],GO:[20,16],PE:[20,18],MP:[20,13]}}];
-    localStorage.setItem('fr_plano_v1',JSON.stringify(data));
+    localStorage.setItem('fr_pending_v2',JSON.stringify(data));
    });
-   await page.reload();await page.locator('#tab-hoje').waitFor();
+   await page.reload();await login(page);
    for(const section of sections){await page.locator(`#tab-${section}`).click();const label=`${width}/${theme}/${section}/populado`;await layout(page,label);await accessibility(page,label);results.push(label)}
    // Roving tab index and horizontal visibility.
    await page.locator('#tab-hoje').focus();await page.keyboard.press('End');

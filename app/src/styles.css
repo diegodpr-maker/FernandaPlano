@@ -113,6 +113,8 @@ svg text{fill:var(--mut);font-size:11px}
 .banner a,.banner button{margin-left:6px}
 @media print{.top,#toast{display:none}}
 
+.pwa-status{padding-top:8px}.pwa-status p{margin:8px 0}
+.unlock-page{min-height:100dvh;justify-content:center;align-items:center;padding:24px 16px}.unlock-card{width:100%;max-width:420px;padding:28px}.unlock-card h1{font-size:28px}.unlock-card input{width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:20px}.unlock-card form>.btn{width:100%;margin-top:16px;min-height:46px}.unlock-card [role=alert]{color:var(--low)}.unlock-card .pwa-status{border-top:1px solid var(--line);margin-top:24px;padding-top:16px}
 
 
 /* Identidade, conforto de leitura e interação do PWA. */

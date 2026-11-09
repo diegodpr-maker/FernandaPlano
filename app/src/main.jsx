@@ -2,6 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import './styles.css';
+import { unlock } from './auth.js';
+import { localDB } from './local-db.js';
+import { syncNow, subscribeSync, resolveConflict } from './sync.js';
+
+function SyncStatus(){
+ const [status,setStatus]=useState({message:'SQLite local'});
+ useEffect(()=>subscribeSync(setStatus),[]);
+ return <div className="pwa-status"><div className="row sp"><span className="small" role="status">{status.message}</span><button className="btn sm" onClick={()=>syncNow()}>Sincronizar agora</button></div>{status.conflict&&<div className="banner"><p>Escolha qual versão manter. Uma cópia da outra será baixada antes da troca.</p><button className="btn sm" onClick={()=>resolveConflict('online')}>Usar dados online neste aparelho</button><button className="btn sm" onClick={()=>resolveConflict('local')}>Enviar dados deste aparelho</button></div>}</div>;
+}
 
 function InstallStatus() {
   const [prompt, setPrompt] = useState(null);
@@ -64,6 +73,8 @@ function App() {
           </div>
           <InstallStatus />
         </div>
+        <div className="row sp"><button className="btn sm" onClick={() => location.reload()}>Bloquear</button></div>
+        <SyncStatus />
         <nav className="tabs" id="tabs" role="tablist" aria-label="Seções do plano" />
       </div>
     </header>
@@ -72,7 +83,26 @@ function App() {
     <div id="toast" role="status" />
   </>;
 }
-flushSync(() => createRoot(document.getElementById('root')).render(<App />));
-import('./engine.js').catch(() => {
-  document.getElementById('main').textContent = 'Não foi possível abrir o plano. Recarregue a página; seus dados permanecem neste aparelho.';
-});
+const root = createRoot(document.getElementById('root'));
+function Unlock() {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const password = form.elements.password.value;
+    setBusy(true);
+    setError('');
+    try {
+      const access=await unlock(password);
+      const saved=await localDB.load();
+      if(access.online && !saved.payload && !localStorage.getItem('fr_plano_v1'))await syncNow();
+      flushSync(() => root.render(<App />));
+      await import('./engine.js');
+    } catch(e) {
+      setError(e.message || 'Não foi possível desbloquear. Recarregue e tente novamente.');
+    } finally { setBusy(false); }
+  }
+  return <main className="unlock-page"><section className="card unlock-card"><h1>Plano da Fernanda</h1><p className="muted">Digite a senha para abrir seu plano de estudos.</p><form onSubmit={submit}><label className="f" htmlFor="password">Senha<input id="password" name="password" type="password" inputMode="numeric" autoComplete="current-password" required autoFocus aria-describedby={error ? 'unlock-error' : undefined} /></label>{error && <p id="unlock-error" role="alert">{error}</p>}<button className="btn pri" type="submit" disabled={busy}>{busy ? 'Verificando…' : 'Entrar'}</button></form><InstallStatus /></section></main>;
+}
+flushSync(() => root.render(<Unlock />));

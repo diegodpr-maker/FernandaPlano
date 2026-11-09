@@ -1,56 +1,52 @@
-# FernandaPlano
+# FernandaPlano — SQLite online e offline
 
-[Abrir aplicativo](https://diegodpr-maker.github.io/FernandaPlano/)
+[Abrir aplicação](https://fernanda-plano-online.diego-dpr995234.chatgpt.site)
 
-Plano de estudos para residência médica: cronograma, temas, questões, desempenho, biblioteca de imagens, editais e caderno de erros.
+## Gravação e sincronização
 
-## PWA
+O navegador executa SQLite com sql.js/WASM e persiste o arquivo binário em IndexedDB (`fr_sqlite_v1`). Cada gravação usa uma transação e só exibe confirmação depois de persistir. Um diário local recupera alterações de texto pendentes se o navegador fechar antes do debounce. Registros e imagens antigos são migrados sem apagar os originais.
 
-Abra o site uma vez com internet e aguarde “Disponível offline neste aparelho”. Use **Instalar aplicativo** ou o menu do navegador. No iPhone: Safari → Compartilhar → Adicionar à Tela de Início. Links externos continuam dependendo de internet.
+A versão hospedada usa Cloudflare D1 (SQLite gerenciado). A alternativa Docker usa `node:sqlite` e um volume persistente. A API de sincronização é a mesma.
 
-Uma versão nova é baixada em segundo plano. Quando houver aviso, feche todas as abas e janelas do aplicativo e abra novamente. O cache de arquivos não contém os registros de estudo.
+A sincronização ocorre ao recuperar a conexão, periodicamente a cada minuto e pelo botão **Sincronizar agora**. Atualizações online são baixadas para o SQLite local. Alterações de dois aparelhos baseadas na mesma revisão geram conflito explícito: a pessoa escolhe qual versão usar e baixa uma cópia da outra. O servidor preserva revisões anteriores. Reenvios têm identificador idempotente, evitando duplicação quando a resposta de uma gravação se perde. Uma aba desatualizada não pode sobrescrever silenciosamente outra.
 
-## Dados e compatibilidade
+Dados offline continuam locais até a sincronização. Primeiro acesso e primeiro cadastro do aparelho exigem internet. A verificação offline usa PBKDF2 com salt aleatório no aparelho e não criptografa os dados locais. A senha e o segredo de sessão online ficam em variáveis secretas da hospedagem, nunca no repositório. A API exige sessão HttpOnly, verifica origem e limita tentativas de login.
 
-Mantidos `fr_plano_v1` (localStorage), `fr_last_backup` e `fr_plano_img` (IndexedDB), além do formato de backup original. Dados do mesmo endereço e navegador continuam disponíveis. Para mudar de aparelho, navegador ou endereço, exporte e importe um backup em Ajustes. Não há login nem sincronização entre aparelhos. O servidor não recebe os registros.
+## Migração do endereço antigo
 
-## Desenvolvimento
+[GitHub Pages](https://diegodpr-maker.github.io/FernandaPlano/) exibe um link para a nova versão e permite exportar registros e imagens antigos. Importe o arquivo em Ajustes na nova versão. Instale o PWA pelo novo endereço. Para atualizar uma instalação antiga, feche todas as abas e janelas antes de abrir novamente.
 
-Requer Node 24 ou posterior.
+## Desenvolvimento e Docker
 
 ```sh
 cd app
 npm ci
-npm run dev
-```
-
-```sh
 npm run build
 npm test
-npm start
 ```
 
-O servidor abre em `http://localhost:3000`. `GET /api/health` informa a saúde do serviço. Manifesto e service worker funcionam na raiz do Docker e no subdiretório do GitHub Pages.
-
-## Docker
+Copie `.env.example` para `.env` e configure `APP_PASSWORD` e `SESSION_SECRET` com valores privados. Não versione esse arquivo. Com Docker instalado:
 
 ```sh
-cd app
 docker compose up -d --build
 ```
 
-O container usa Node 24, roda sem root e serve o build React. Em um servidor público, configure HTTPS no proxy ou plataforma de hospedagem: o PWA exige HTTPS, exceto em localhost. GitHub Pages hospeda o build estático, não executa o container Node. Não é necessário banco ou volume para esta versão, pois os dados permanecem no navegador.
+O volume `fernanda-data` mantém `/app/data/fernanda.sqlite`. Não remova o volume ao atualizar. Para executar Node diretamente, forneça as mesmas variáveis de ambiente e use `npm start`. Configure HTTPS para acesso público; localhost funciona no desenvolvimento.
 
-## Estrutura e publicação
+## Testes
 
-- `app/src/main.jsx`: estrutura React, instalação e estado do PWA.
-- `app/src/renderer.jsx`: renderização React das telas e diálogos, com adaptação dos templates existentes.
-- `app/src/engine.js`: regras, persistência e eventos preservados do sistema original. A migração é incremental: os templates das telas ainda são gerados por essas funções e convertidos em elementos React.
-- `app/src/caderno.js`: lógica do caderno de erros.
-- `app/server.mjs`: servidor HTTP Node sem dependências de produção.
-- `app/scripts/build-sw.mjs`: cache versionado de todos os arquivos do aplicativo.
-- `.github/workflows/deploy.yml`: build, testes, construção e verificação do Docker, publicação em Pages.
+A suíte verifica senha incorreta/correta, navegação, gravação, backup/restauração, rejeição de backup inválido, SQLite binário reaberto, envio ao servidor, alteração simulada em outro aparelho, atualização do banco offline, persistência após reabertura do SQLite do servidor, conflitos, reenvio idempotente e cache offline.
 
-Configure Settings → Pages → Source como **GitHub Actions**. Cada push na main testa e publica `app/dist`; o HTML na raiz é a versão anterior preservada para referência e não é a fonte da publicação atual.
+## Estrutura
 
-Os testes cobrem navegação nas nove seções, gravação, backup/restauração, servidor e navegação sem rede pelo service worker. A instalação como aplicativo também depende do suporte do navegador do usuário.
+- `app/src/local-db.js`: SQLite offline e gravação transacional.
+- `app/src/sync.js`: sincronização e resolução de conflitos.
+- `app/src/auth.js`: autenticação online e desbloqueio offline.
+- `app/api.mjs`: API comum ao Node e Worker.
+- `app/node-db.mjs`: adaptador SQLite do Node.
+- `app/db/schema.sql`: esquema do servidor.
+- `app/scripts/build-worker.mjs`: empacotamento para hospedagem gerenciada.
+- `portal/`: entrada do endereço antigo e exportação de dados.
+- `app/src/engine.js`: funções originais preservadas, integradas à persistência SQLite.
+
+O GitHub Actions compila, testa e verifica o container, e publica o portal. A aplicação online usa a publicação gerenciada de Sites. As mudanças no servidor online devem ser publicadas por esse fluxo, incluindo migrações de esquema.

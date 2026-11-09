@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { server } from '../server.mjs';
 test('servidor entrega app, manifesto, SW e saúde; rejeita métodos e arquivos ausentes', async () => {
+  process.env.DB_PATH=':memory:';
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
